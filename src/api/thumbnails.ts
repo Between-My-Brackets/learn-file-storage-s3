@@ -8,7 +8,7 @@ import {
   NotFoundError,
   UserForbiddenError,
 } from "./errors";
-
+import path from 'path';
 
 
 export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
@@ -36,6 +36,7 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   }
 
   const mediaType = imageFile.type;
+  console.log(mediaType);
   const imageBlob = await imageFile.arrayBuffer();
 
   const video = getVideo(cfg.db, videoId);
@@ -47,10 +48,20 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
     throw new UserForbiddenError("Video does not belong to this user");
   }
 
-  const imageBuffer = Buffer.from(imageBlob);
-  const imageBase64 = imageBuffer.toString("base64");
-  const thumbnailURL = `data:${mediaType};base64,${imageBase64}`;
+  const fileExtension = mediaType.split("/")[1];
+  if(!fileExtension){
+    throw new BadRequestError("Invlid media type");
+  }
 
+  const fileName = `${videoId}.${fileExtension}`;
+  const filePath = path.join(cfg.assetsRoot, fileName);
+
+  await Bun.write(filePath, imageBlob);
+
+
+  // const imageBuffer = Buffer.from(imageBlob);
+  // const imageBase64 = imageBuffer.toString("base64");
+  const thumbnailURL = `http://localhost:${cfg.port}/assets/${fileName}`;
   video.thumbnailURL = thumbnailURL;
 
   updateVideo(cfg.db, video);
