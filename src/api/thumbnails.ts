@@ -9,6 +9,7 @@ import {
   UserForbiddenError,
 } from "./errors";
 import path from 'path';
+import { randomBytes } from "crypto";
 
 
 export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
@@ -52,8 +53,8 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   if(!fileExtension){
     throw new BadRequestError("Invlid media type");
   }
-
-  const fileName = `${videoId}.${fileExtension}`;
+  const fileID = randomBytes(32).toString("base64");
+  const fileName = `${fileID}.${fileExtension}`;
   const filePath = path.join(cfg.assetsRoot, fileName);
 
   await Bun.write(filePath, imageBlob);
