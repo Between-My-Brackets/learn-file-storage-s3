@@ -52,19 +52,21 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   const fileID = randomBytes(16).toString("hex");
   const tempFileName = `${fileID}${fileExtension}`;
   const tempFilePath = path.join(cfg.filepathRoot, tempFileName);
+  let processedFilePath: string | undefined;
 
   try {
     // Save the uploaded file to a temporary file on disk
     await Bun.write(tempFilePath, videoFile);
+    processedFilePath = await processVideoForFastStart(tempFilePath);
 
     // Generate S3 key
-    const aspectRatio = await getVideoAspectRatio(tempFilePath);
+    const aspectRatio = await getVideoAspectRatio(processedFilePath);
     const s3Key = `${aspectRatio}/${fileID}.mp4`;
 
     // Put the object into S3
     await cfg.s3Client.write(
       s3Key,
-      file(tempFilePath)
+      file(processedFilePath)
     );
 
     // Update the VideoURL of the video record in the database
@@ -75,6 +77,9 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   } finally {
     // Remember to remove the temp file when the process finishes
     await rm(tempFilePath);
+    if(processedFilePath) {
+      await rm(processedFilePath);
+    }
   }
 
   const updatedVideo = getVideo(cfg.db, video.id);
@@ -99,33 +104,65 @@ async function getVideoAspectRatio(filePath: string): Promise<"landscape" | "por
         stdout: "pipe",
         stderr: "pipe",
     });
-    
+
     const stdoutText = await new Response(proc.stdout).text();
     const stderrText = await new Response(proc.stderr).text();
     const exitCode = await proc.exited;
-    
+
     if(exitCode !== 0){
         throw new Error(`ffprobe failed with exit code ${exitCode}: ${stderrText}`);
     }
-    
+
     const parsed = JSON.parse(stdoutText);
     const stream = parsed?.streams?.[0];
     const width = Number(stream?.width);
     const height = Number(stream?.height);
-    
+
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
         throw new Error("ffprobe did not return valid width/height");
     }
-    
+
     const ratio = width/height;
     const landscape = 16/9;
     const portrait = 9/16;
     const tolerance = 0.02;
-    
+
     if(Math.abs(ratio - landscape) <= tolerance)
         return "landscape";
     if(Math.abs(ratio - portrait) <= tolerance)
         return "portrait";
-    
+
     return "other";
+}
+
+async function processVideoForFastStart(inputFilePath: string): Promise<string>{
+  const outputFilePath = `${inputFilePath}.processed`;
+  const proc = Bun.spawn({
+    cmd: [
+      "ffmpeg",
+      "-i",
+      inputFilePath,
+      "-movflags",
+      "faststart",
+      "-map_metadata",
+      "0",
+      "-codec",
+      "copy",
+      "-f",
+      "mp4",
+      outputFilePath,
+    ],
+    stdout: "pipe",
+    stderr: "pipe"
+  });
+
+  const stdoutText = await new Response(proc.stdout).text();
+  const stderrText = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+
+  if (exitCode !== 0) {
+    throw new Error(`ffmpeg faststart failed with exit code ${exitCode}: ${stderrText || stdoutText}`);
+  }
+
+  return outputFilePath;
 }
