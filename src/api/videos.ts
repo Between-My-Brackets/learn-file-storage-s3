@@ -58,7 +58,8 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
     await Bun.write(tempFilePath, videoFile);
 
     // Generate S3 key
-    const s3Key = `${fileID}.mp4`;
+    const aspectRatio = await getVideoAspectRatio(tempFilePath);
+    const s3Key = `${aspectRatio}/${fileID}.mp4`;
 
     // Put the object into S3
     await cfg.s3Client.write(
@@ -79,4 +80,52 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   const updatedVideo = getVideo(cfg.db, video.id);
 
   return respondWithJSON(200, updatedVideo);
+}
+
+async function getVideoAspectRatio(filePath: string): Promise<"landscape" | "portrait" | "other"> {
+    const proc = Bun.spawn({
+        cmd: [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "json",
+            filePath,
+        ],
+        stdout: "pipe",
+        stderr: "pipe",
+    });
+    
+    const stdoutText = await new Response(proc.stdout).text();
+    const stderrText = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+    
+    if(exitCode !== 0){
+        throw new Error(`ffprobe failed with exit code ${exitCode}: ${stderrText}`);
+    }
+    
+    const parsed = JSON.parse(stdoutText);
+    const stream = parsed?.streams?.[0];
+    const width = Number(stream?.width);
+    const height = Number(stream?.height);
+    
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        throw new Error("ffprobe did not return valid width/height");
+    }
+    
+    const ratio = width/height;
+    const landscape = 16/9;
+    const portrait = 9/16;
+    const tolerance = 0.02;
+    
+    if(Math.abs(ratio - landscape) <= tolerance)
+        return "landscape";
+    if(Math.abs(ratio - portrait) <= tolerance)
+        return "portrait";
+    
+    return "other";
 }
